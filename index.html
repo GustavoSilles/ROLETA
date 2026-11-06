@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#110a1f">
+  <title>A roleta</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bungee&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- Painel lateral (abre/fecha) -->
+    <aside class="panel" id="panel" aria-label="Painel de opções">
+      <div class="panel-top">
+        <span class="panel-brand">A roleta</span>
+        <button class="icon-btn panel-close" id="panelClose" type="button" aria-label="Fechar painel" title="Fechar painel"><i data-icon="panelClose"></i></button>
+      </div>
+
+      <section class="card">
+        <div class="card-head">
+          <h2><i data-icon="list"></i> Opções</h2>
+          <span class="count" id="optionCount"></span>
+          <button class="link-btn hidden" id="clearOptionsBtn" type="button" title="Remover todas as opções">Limpar</button>
+        </div>
+        <ul id="optionList" class="option-list"></ul>
+        <form id="addOptionForm" class="row add-row add-options" autocomplete="off">
+          <textarea id="newOption" rows="1" placeholder="Uma opção por linha" aria-label="Novas opções, uma por linha. Ctrl+Enter adiciona."></textarea>
+          <button type="submit" class="add-btn" aria-label="Adicionar opções" title="Adicionar (Ctrl+Enter)"><i data-icon="plus"></i></button>
+        </form>
+        <div class="specials">
+          <label class="toggle">
+            <input type="checkbox" id="allToggle">
+            <span class="special-label">TUDO</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="noneToggle">
+            <span class="special-label">NADA</span>
+          </label>
+        </div>
+        <button id="restoreBtn" class="ghost hidden" type="button"><i data-icon="undo"></i> Trazer de volta as opções eliminadas</button>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2><i data-icon="sliders"></i> Regras</h2></div>
+        <label class="field">
+          <span class="field-label">Malandragem da roleta <span class="trick-pct" id="trickVal">35%</span></span>
+          <b class="trick-mood" id="trickMood">Malandrinha</b>
+          <input type="range" id="trickChance" min="0" max="100" step="5" aria-describedby="trickMood">
+          <span class="range-ends"><span>Santinha</span><span>Sem vergonha</span></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="elimToggle">
+          <span>Modo eliminação<small>Quem cair sai da roleta, até sobrar um</small></span>
+        </label>
+      </section>
+
+      <details class="card" id="playersCard">
+        <summary class="card-head">
+          <h2><i data-icon="users"></i> Jogadores &amp; vetos</h2>
+          <span class="count" id="playerCount"></span>
+        </summary>
+        <p class="type-help">Cada jogador tem 1 veto: manda girar de novo. No modo eliminação, salva a opção sorteada de sair.</p>
+        <ul id="playerList"></ul>
+        <form id="addPlayerForm" class="row add-row" autocomplete="off">
+          <input id="newPlayer" type="text" placeholder="Nome do jogador..." maxlength="20" aria-label="Nome do jogador">
+          <button type="submit" class="add-btn" aria-label="Adicionar jogador"><i data-icon="plus"></i></button>
+        </form>
+        <button id="resetVetosBtn" class="ghost" type="button"><i data-icon="undo"></i> Devolver todos os vetos</button>
+      </details>
+
+      <details class="card" id="historyCard">
+        <summary class="card-head">
+          <h2><i data-icon="history"></i> Histórico</h2>
+          <span class="count" id="historyCount"></span>
+        </summary>
+        <ul id="historyList"></ul>
+        <button id="clearHistoryBtn" class="ghost" type="button">Limpar histórico</button>
+      </details>
+    </aside>
+    <div class="panel-backdrop" id="panelBackdrop"></div>
+
+    <!-- Botões fixos nos cantos -->
+    <button class="panel-toggle" id="panelOpen" type="button" aria-label="Abrir opções" aria-controls="panel" aria-expanded="false">
+      <i data-icon="panelOpen"></i><span>Opções</span>
+    </button>
+    <button class="mute-btn" id="muteBtn" type="button" aria-label="Desligar sons" title="Sons"><i data-icon="volume"></i></button>
+
+    <!-- Roleta, centralizada -->
+    <main class="stage" aria-label="Roleta">
+      <div class="narrator" id="narrator" aria-live="polite">Pronto pra girar?</div>
+      <div class="wheel-wrap" id="wheelWrap">
+        <canvas id="wheel" role="img" aria-label="Roleta com as opções"></canvas>
+      </div>
+      <button class="spin-btn" id="spinBtn" type="button">GIRAR!</button>
+      <p class="hint">
+        <span class="hint-touch">Segure o botão pra girar mais forte, ou arraste a roleta</span>
+        <span class="hint-keys"> · <kbd>Espaço</kbd> também (pode segurar)</span>
+      </p>
+    </main>
+  </div>
+
+  <div class="vignette"></div>
+  <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="resultTitle">
+    <div class="result-card" id="resultCard"></div>
+  </div>
+  <canvas id="fx" aria-hidden="true"></canvas>
+
+  <script src="app.js"></script>
+</body>
+</html>

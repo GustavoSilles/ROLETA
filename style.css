@@ -1,0 +1,756 @@
+* { box-sizing: border-box; }
+
+:root {
+  --gold: #ffcc4d;
+  --gold-deep: #b36b00;
+  --red: #e63946;
+  --bg: #110a1f; /* fundo da página e do painel: mesma cor, sem degradê */
+  --card: rgba(27, 16, 48, 0.82);
+  --line: rgba(255, 204, 77, 0.18);
+  --field: #120a22;
+  --field-line: #3d2c5c;
+  --text: #f6eedd;
+  --muted: #a99bbf;
+  --title-font: 'Bungee', Impact, 'Arial Black', sans-serif;
+  --radius: 16px;
+}
+
+html { background: var(--bg); }
+html, body { margin: 0; min-height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.4;
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app {
+  min-height: 100vh;
+  transition: filter 1s ease;
+}
+
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+/* ---------- Palco: a roleta no centro da tela ---------- */
+.stage {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 64px 16px 28px;
+  position: relative;
+  z-index: 31; /* acima da vinheta de suspense */
+  transition: padding-left 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.narrator {
+  font-family: var(--title-font);
+  font-size: clamp(1.15rem, 3.6vw, 1.9rem);
+  min-height: 1.5em;
+  padding: 0 16px;
+  color: #fff;
+  text-shadow: 0 0 14px #ff4d6d;
+  text-align: center;
+  line-height: 1.2;
+}
+.narrator.pop { animation: pop 0.45s ease; }
+@keyframes pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+/* ---------- Botões fixos nos cantos ---------- */
+.mute-btn, .panel-toggle {
+  position: fixed;
+  top: 16px;
+  z-index: 34;
+  height: 42px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  transition: transform 0.25s, background 0.15s, opacity 0.25s;
+}
+.mute-btn {
+  right: 16px;
+  width: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.mute-btn:hover { transform: scale(1.08); background: #2b1a48; }
+.mute-btn.off { opacity: 0.6; }
+
+.panel-toggle {
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 0 12px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.panel-toggle:hover { background: #2b1a48; }
+.panel-toggle .icon { width: 20px; height: 20px; color: var(--gold); }
+body.panel-open .panel-toggle { opacity: 0; pointer-events: none; transform: translateX(-12px); }
+
+.wheel-wrap {
+  width: min(86vw, 600px, calc(100vh - 230px));
+  min-width: 260px;
+  aspect-ratio: 1;
+  transition: transform 1.2s ease;
+  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.6));
+}
+#wheel { display: block; touch-action: none; cursor: grab; }
+#wheel:active { cursor: grabbing; }
+
+.spin-btn {
+  font-family: var(--title-font);
+  font-size: 1.6rem;
+  min-width: 220px;
+  padding: 14px 48px;
+  border-radius: 999px;
+  border: none;
+  color: #2b1300;
+  background: linear-gradient(#ffe08a, #ffb400);
+  box-shadow: 0 6px 0 var(--gold-deep), 0 0 30px rgba(255, 180, 0, 0.45);
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s, filter 0.2s;
+  /* segurar pra carregar */
+  --charge: 0;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+/* barra de força: enche da esquerda pra direita, do dourado ao vermelho */
+.spin-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transform-origin: left center;
+  transform: scaleX(var(--charge));
+  background: linear-gradient(90deg, #ffb400, #ff7a1a 55%, #ff3d3d);
+}
+/* reflexo correndo por cima da barra enquanto carrega */
+.spin-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.45) 50%, transparent 70%);
+  background-size: 250% 100%;
+}
+.spin-btn:hover { filter: brightness(1.08); }
+.spin-btn:active { transform: translateY(4px); box-shadow: 0 2px 0 var(--gold-deep); }
+.spin-btn:disabled { filter: saturate(0.4); opacity: 0.75; cursor: wait; transform: none; }
+
+.spin-btn.charging {
+  transition: none;
+  color: #2b0a00;
+  box-shadow:
+    0 calc(6px - var(--charge) * 3px) 0 var(--gold-deep),
+    0 0 calc(30px + var(--charge) * 60px) rgba(255, calc(180 - var(--charge) * 130), 0, calc(0.45 + var(--charge) * 0.4));
+}
+.spin-btn.charging::after { opacity: 1; animation: sweep 0.9s linear infinite; }
+.spin-btn.maxed { animation: maxed-glow 0.3s ease-in-out infinite alternate; }
+.spin-btn.maxed::after { animation-duration: 0.4s; }
+@keyframes sweep { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+@keyframes maxed-glow { to { filter: brightness(1.25) saturate(1.2); } }
+
+.hint { color: var(--muted); font-size: 0.85rem; margin: 0; text-align: center; }
+kbd {
+  font: inherit;
+  font-size: 0.8em;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--field-line);
+  border-bottom-width: 2px;
+  background: var(--field);
+}
+@media (hover: none) { .hint-keys { display: none; } }
+
+/* ---------- Painel ---------- */
+/* Barra lateral à esquerda. Fechada, sai da tela pra esquerda. */
+:root { --panel-w: 380px; }
+.panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 35;
+  width: min(var(--panel-w), 92vw);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* reserva o espaço da barra de rolagem sempre: os cards não mudam de largura
+     quando a barra aparece/some (sem "salto" no layout) */
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 14px 6px 28px 14px; /* direita menor: a barra (8px) completa o espaço */
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.45);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 0.35s,
+    opacity 0.4s;
+}
+/* Barras de rolagem do site todo (painel, campo de opções...): finas, arredondadas, sem setas.
+   A borda transparente + background-clip "afina" a barra em qualquer cor de fundo. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #3d2c5c;
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: #5a4384; background-clip: padding-box; }
+/* Firefox (não tem os seletores ::-webkit-scrollbar) */
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: #3d2c5c transparent; }
+}
+
+body.panel-open .panel {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s, opacity 0.4s;
+}
+body.busy .panel { opacity: 0.4; pointer-events: none; }
+body.no-anim .panel, body.no-anim .stage, body.no-anim .panel-toggle { transition: none !important; }
+
+.panel-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 2px 2px 6px;
+}
+.panel-brand {
+  font-family: var(--title-font);
+  color: var(--gold);
+  font-size: 1.05rem;
+  letter-spacing: 0.5px;
+}
+.panel-top .panel-close .icon { width: 20px; height: 20px; }
+
+/* Fundo escurecido atrás do painel (só nas telas estreitas, onde o painel cobre a roleta) */
+.panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 34;
+  background: rgba(5, 2, 10, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+/* Tela larga: com o painel aberto, a roleta centraliza no espaço que sobra à direita */
+@media (min-width: 1000px) {
+  body.panel-open .stage { padding-left: calc(var(--panel-w) + 16px); }
+}
+/* Tela estreita: o painel abre por cima, com fundo escurecido */
+@media (max-width: 999px) {
+  body.panel-open .panel-backdrop { opacity: 1; pointer-events: auto; }
+}
+
+/* Seções do painel: sem caixa, separadas só por espaço e uma linha fina */
+.card {
+  padding: 16px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.panel .card:last-child { border-bottom: none; }
+.card-head .count { margin-left: auto; }
+
+/* Botão discreto de texto (ex.: "Limpar") */
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.link-btn:hover { color: #ff8a8a; background: rgba(255, 255, 255, 0.05); }
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.card-head h2 { margin: 0; font-size: 1.02rem; color: var(--gold); letter-spacing: 0.3px; }
+.count {
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+
+/* Cartões recolhíveis */
+details.card > summary { list-style: none; cursor: pointer; margin-bottom: 0; user-select: none; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::after {
+  content: '▾';
+  color: var(--muted);
+  transition: transform 0.2s;
+  margin-left: 4px;
+}
+details.card > summary .count { margin-left: auto; }
+details.card:not([open]) > summary::after { transform: rotate(-90deg); }
+details.card[open] > summary { margin-bottom: 10px; }
+details.card > summary:hover h2 { filter: brightness(1.15); }
+
+ul { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+
+/* Linha de opção (compacta) */
+.opt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 2px 1px 10px;
+  border-radius: 9px;
+  background: var(--field);
+  border: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+.opt-row:hover { border-color: rgba(255, 255, 255, 0.07); }
+.opt-row:focus-within { border-color: var(--gold); }
+.swatch { width: 11px; height: 11px; border-radius: 50%; flex: none; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15); }
+/* o nome é editável: no hover ganha um fundinho e cursor de texto, pra mostrar que dá pra clicar */
+.opt-row input[type=text] {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: text;
+  transition: background 0.15s;
+}
+.opt-row input[type=text]:hover { background: rgba(255, 255, 255, 0.05); }
+.opt-row input[type=text]:focus { outline: none; background: rgba(255, 255, 255, 0.07); }
+.opt-row .icon-btn { width: 28px; height: 28px; }
+.opt-row.eliminated input { text-decoration: line-through; opacity: 0.45; }
+.opt-row.eliminated .swatch { opacity: 0.3; }
+
+/* Chaves das fatias especiais ("Todas!" / "Nenhuma") */
+.specials {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--field-line);
+}
+.specials .toggle.eliminated > span { text-decoration: line-through; opacity: 0.5; }
+
+input[type=text], textarea, select {
+  background: var(--field);
+  border: 1px solid var(--field-line);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  min-width: 0;
+}
+input[type=text]::placeholder, textarea::placeholder { color: #6f6390; }
+input[type=text]:focus, textarea:focus, select:focus { outline: 2px solid var(--gold); outline-offset: -1px; }
+
+.row { display: flex; gap: 6px; }
+.row input { flex: 1; }
+.add-row select { flex: none; }
+/* Campo de novas opções (textarea): uma por linha, cresce com o texto */
+.add-options { align-items: flex-start; }
+.add-options textarea {
+  flex: 1;
+  resize: none;
+  min-height: 40px;
+  line-height: 1.4;
+  overflow-y: hidden; /* sem rolagem própria: o campo cresce e o painel rola */
+  font: inherit;
+}
+.add-options .add-btn { height: 40px; }
+
+button { font: inherit; cursor: pointer; color: inherit; }
+.add-btn {
+  flex: none;
+  width: 40px;
+  border: none;
+  border-radius: 10px;
+  background: var(--gold);
+  color: #2b1300;
+  font-size: 1.3rem;
+  font-weight: 800;
+  line-height: 1;
+}
+.add-btn:hover { filter: brightness(1.08); }
+
+.icon-btn {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  border-radius: 8px;
+}
+.icon-btn:hover { color: #ff6b81; background: rgba(255, 255, 255, 0.06); }
+
+.ghost {
+  background: transparent;
+  border: 1px dashed #4d3a70;
+  color: var(--muted);
+  border-radius: 10px;
+  padding: 7px 10px;
+  margin-top: 8px;
+  width: 100%;
+}
+.ghost:hover { color: var(--text); border-color: var(--gold); }
+
+.type-help { color: var(--muted); font-size: 0.8rem; margin: 8px 2px 0; }
+details .type-help { margin: 0 2px 10px; }
+
+.hidden { display: none !important; }
+
+/* Regras */
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.field-label { display: flex; justify-content: space-between; align-items: baseline; }
+.field-label b { color: var(--gold); }
+input[type=range] { accent-color: var(--gold); width: 100%; margin: 4px 0 0; }
+
+/* Malandragem: a cor vai do dourado (santinha) ao vermelho (sem vergonha) — --mal vai de 0 a 1 */
+.field { --mal: 0.35; --mal-color: rgb(255, calc(204 - var(--mal) * 140), calc(77 - var(--mal) * 20)); }
+.trick-pct { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.trick-mood {
+  color: var(--mal-color);
+  font-family: var(--title-font);
+  font-weight: 400;
+  font-size: 0.95rem;
+  letter-spacing: 0.3px;
+  min-height: 1.3em;
+  transition: color 0.2s;
+}
+#trickChance { accent-color: var(--mal-color); }
+.range-ends { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); }
+
+/* Chaves liga/desliga (no lugar da caixinha de marcar): texto à esquerda, chave à direita */
+.toggle {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.toggle small { display: block; color: var(--muted); font-size: 0.78rem; }
+.toggle input[type=checkbox] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  border-radius: 999px;
+  background: #3d2c5c;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.toggle input[type=checkbox]::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #cbbfe0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s cubic-bezier(0.3, 1.4, 0.5, 1), background 0.2s;
+}
+.toggle input[type=checkbox]:checked { background: var(--gold); }
+.toggle input[type=checkbox]:checked::before { transform: translateX(16px); background: #2b1300; }
+.toggle:hover input[type=checkbox]:not(:checked) { background: #4d3a70; }
+.toggle input[type=checkbox]:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+
+/* Jogadores e histórico */
+.player-row, .hist-row { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.player-row .name, .hist-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.veto-on { color: #ff8a8a; font-size: 0.8rem; white-space: nowrap; }
+.veto-off { color: var(--muted); font-size: 0.8rem; white-space: nowrap; opacity: 0.7; }
+.hist-row time { color: var(--muted); font-size: 0.78rem; flex: none; font-variant-numeric: tabular-nums; }
+.tag { font-size: 0.7rem; padding: 2px 7px; border-radius: 999px; background: #3d2c5c; color: #ddd; flex: none; }
+.tag.vetado { background: #5c1020; color: #ffb3c0; }
+.tag.salvo { background: #0f4a3a; color: #9ff0cf; }
+.tag.vencedor { background: #5c4a00; color: #ffe38a; }
+.empty { color: var(--muted); font-size: 0.88rem; }
+
+/* ---------- Suspense / tristeza ---------- */
+.vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 1.2s;
+}
+body.suspense .vignette { opacity: 1; }
+body.suspense .wheel-wrap { transform: scale(1.04); }
+body.suspense .narrator { animation: shake 0.3s infinite; }
+body.suspense .mute-btn { opacity: 0.3; }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px) rotate(-1deg); }
+  75% { transform: translateX(2px) rotate(1deg); }
+}
+
+
+/* ---------- Resultado ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 2, 10, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  padding: 20px;
+  backdrop-filter: blur(3px);
+}
+.result-card {
+  background: linear-gradient(160deg, #2b1145, #160a26);
+  border: 2px solid var(--gold);
+  border-radius: 22px;
+  padding: 28px 26px 22px;
+  text-align: center;
+  max-width: 460px;
+  width: 100%;
+  animation: cardIn 0.5s cubic-bezier(0.2, 1.6, 0.4, 1);
+  box-shadow: 0 0 60px rgba(255, 204, 77, 0.35);
+}
+@keyframes cardIn { from { transform: scale(0.4) rotate(-6deg); opacity: 0; } }
+
+.result-title { font-family: var(--title-font); color: var(--gold); font-size: 1.4rem; margin: 0; font-weight: 400; }
+.result-name {
+  font-family: var(--title-font);
+  font-size: clamp(1.7rem, 7vw, 2.7rem);
+  margin: 10px 0;
+  color: #fff;
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+  word-break: break-word;
+  line-height: 1.15;
+}
+.result-card p { margin: 6px 0; }
+
+/* "Tudo": etiquetas com as opções que valem, cada uma na cor da sua fatia */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin: 10px 0 4px;
+}
+.chip {
+  --c: #555;
+  background: var(--c);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  animation: chip-in 0.4s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+.chip:nth-child(2) { animation-delay: 0.06s; }
+.chip:nth-child(3) { animation-delay: 0.12s; }
+.chip:nth-child(4) { animation-delay: 0.18s; }
+.chip:nth-child(5) { animation-delay: 0.24s; }
+.chip:nth-child(n + 6) { animation-delay: 0.3s; }
+@keyframes chip-in { from { transform: scale(0); opacity: 0; } }
+
+/* "Nada": as mesmas etiquetas, mas apagadas e riscadas */
+.chips.off .chip {
+  opacity: 0.5;
+  filter: grayscale(0.7);
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+
+.result-card.elim .result-title { color: #ff6b81; }
+
+.actions { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
+.actions button { border: none; border-radius: 999px; padding: 12px 20px; font-weight: 700; width: 100%; }
+.btn-ok { background: var(--gold); color: #2b1300; font-size: 1.05rem; }
+.veto-group { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.veto-group button { width: auto; flex: 1 1 140px; }
+.btn-veto { background: transparent; color: #ff8a8a; border: 1px solid #7a2533 !important; }
+.btn-veto:hover { background: rgba(230, 57, 70, 0.15); }
+/* no modo eliminação o veto "salva": verde em vez de vermelho */
+.btn-save { color: #7fe3b8; border-color: #1f6b52 !important; }
+.btn-save:hover { background: rgba(31, 160, 110, 0.15); }
+.btn-ok:hover { filter: brightness(1.08); }
+.small { font-size: 0.8rem; color: var(--muted); margin-top: 12px !important; }
+
+#fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 50; }
+
+/* ---------- Celular / telas estreitas ---------- */
+/* =========================================================
+   Ícones (SVG de traço)
+   ========================================================= */
+.icon {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+  vertical-align: -0.2em;
+}
+.card-head h2 { display: flex; align-items: center; gap: 8px; }
+.card-head h2 .icon { width: 1.2em; height: 1.2em; opacity: 0.9; }
+
+.mute-btn .icon { width: 20px; height: 20px; color: var(--text); }
+.mute-btn.off .icon { color: var(--muted); }
+.add-btn { display: grid; place-items: center; }
+.add-btn .icon { width: 20px; height: 20px; stroke-width: 2.6; }
+.icon-btn .icon { width: 16px; height: 16px; }
+.ghost { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.ghost .icon { width: 15px; height: 15px; }
+
+.special-label { font-weight: 700; letter-spacing: 0.5px; }
+.veto-on .icon { width: 1em; height: 1em; }
+
+.actions button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.actions .icon { width: 18px; height: 18px; }
+
+/* =========================================================
+   Ilustrações animadas do cartão de resultado
+   ========================================================= */
+.art {
+  display: block;
+  width: 108px;
+  height: 108px;
+  margin: -6px auto 2px;
+  overflow: visible;
+}
+/* centro de giro/escala = centro da ilustração (só nos elementos animados por CSS;
+   os raios e faíscas já usam rotate() próprio no atributo transform) */
+.art .mini, .art .core, .art .cup, .art .shine, .art .blade {
+  transform-box: view-box;
+  transform-origin: 60px 60px;
+}
+
+/* Mini-roleta (Tudo e Nada): mesma peça, animações opostas */
+.art .mini { animation: spin 8s linear infinite; }
+.art .seg { stroke: #2b1407; stroke-width: 1.5; }
+.art .rim { fill: none; stroke: #7a4520; stroke-width: 4; }
+.art .hub { fill: #e0ad45; stroke: #3f2606; stroke-width: 1.5; }
+.art .ghost { fill: none; stroke: rgba(255, 255, 255, 0.22); stroke-width: 1.5; stroke-dasharray: 4 5; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Tudo: gomos acendendo um depois do outro */
+.art-todos .seg {
+  opacity: 0.35;
+  animation: seg-chase 1.2s linear infinite;
+  animation-delay: calc(var(--i) * 0.15s - 1.2s);
+}
+@keyframes seg-chase {
+  0% { opacity: 1; }
+  45%, 100% { opacity: 0.35; }
+}
+
+/* Nada: gomos apagando um a um, a roleta fica vazia (só o contorno tracejado) e depois volta */
+.art-nenhum .seg {
+  animation: seg-off 2.6s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.12s);
+}
+@keyframes seg-off {
+  0%, 8% { opacity: 1; }
+  40%, 82% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.art .glint { fill: #fff; animation: glint 1.6s ease-in-out infinite; }
+.art .glint.g2 { animation-delay: -0.5s; }
+.art .glint.g3 { animation-delay: -1s; }
+@keyframes glint { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+
+@keyframes bob { 50% { transform: translateY(3px); } }
+
+/* Opção normal: estrela entra estourando e solta faíscas */
+.art-normal .core {
+  fill: #ffd36b;
+  stroke: #fff3c4;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 8px rgba(255, 204, 77, 0.8));
+  animation: pop-in 0.7s cubic-bezier(0.2, 1.8, 0.4, 1) both;
+}
+.art-normal .sparks path {
+  stroke: #ffd36b;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 8 30;
+  animation: shoot 1.4s ease-out infinite;
+}
+@keyframes pop-in { from { transform: scale(0) rotate(-40deg); } }
+@keyframes shoot {
+  0% { stroke-dashoffset: 8; opacity: 1; }
+  60%, 100% { stroke-dashoffset: -16; opacity: 0; }
+}
+
+/* Vencedor: troféu flutuando com reflexo */
+.art-winner .cup {
+  fill: rgba(255, 204, 77, 0.18);
+  stroke: #ffd36b;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 10px rgba(255, 204, 77, 0.6));
+  animation: bob 2.4s ease-in-out infinite;
+}
+.art-winner .shine {
+  stroke: #fff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  animation: glint 1.8s ease-in-out infinite, bob 2.4s ease-in-out infinite;
+}
+
+/* Eliminado: tesoura abrindo e fechando */
+.art-elim .blade { fill: none; stroke: #ff6b81; stroke-width: 5; stroke-linecap: round; }
+.art-elim .blade.a { animation: snip-a 0.9s ease-in-out infinite; }
+.art-elim .blade.b { animation: snip-b 0.9s ease-in-out infinite; }
+.art-elim .pin { fill: #ffd36b; }
+@keyframes snip-a { 50% { transform: rotate(-13deg); } }
+@keyframes snip-b { 50% { transform: rotate(13deg); } }
+
+@media (max-width: 480px) {
+  .stage { padding: 68px 12px 24px; }
+  .wheel-wrap { width: min(92vw, calc(100vh - 230px)); }
+  .spin-btn { width: 100%; max-width: 340px; }
+  .icon-btn { width: 38px; height: 38px; }
+  .add-btn { width: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .narrator.pop, body.suspense .narrator, .result-card, .chip,
+  .art, .art *, .spin-btn.maxed, .spin-btn::after { animation: none !important; }
+  .wheel-wrap, .stage, .panel { transition: none !important; }
+}
