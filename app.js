@@ -8,7 +8,7 @@
 
 const TAU = Math.PI * 2;
 const STORAGE_KEY = 'roleta-cinema-v1'; // nome antigo mantido pra não perder os dados salvos
-const MAX_OPTIONS = 24;
+const MAX_OPTIONS = 100;
 
 // Ordem pensada pra cores vizinhas contrastarem (e nenhuma brigar com o dourado do "Tudo")
 const PALETTE = ['#e63946', '#2a9d8f', '#7b4bc4', '#2f7fd1', '#e76f51', '#06a77d', '#d63a8a', '#118ab2', '#5f9e1c', '#b5532a'];
@@ -19,6 +19,15 @@ const SPECIALS = {
   // (ids e tipos internos continuam os antigos pra não perder o que já está salvo)
   todos: { id: '__todos', name: 'Tudo', type: 'todos', color: '#ffc93c' },
   nenhum: { id: '__nenhum', name: 'Nada', type: 'nenhum', color: '#3b3b4f' },
+  // caiu nela: a roleta gira de novo sozinha (nunca é eliminada)
+  again: { id: '__again', name: 'Gira de novo', type: 'again', color: '#1f8a99' },
+};
+
+// Linhas de uma lista colada que ligam uma fatia especial em vez de virar opção comum
+const SPECIAL_ALIASES = {
+  'TUDO': 'includeAll', 'TODAS': 'includeAll', 'TODOS': 'includeAll',
+  'NADA': 'includeNone', 'NENHUM': 'includeNone', 'NENHUMA': 'includeNone',
+  'GIRA DE NOVO': 'includeAgain', 'GIRAR DE NOVO': 'includeAgain', 'GIRE DE NOVO': 'includeAgain',
 };
 
 /* =========================================================
@@ -108,6 +117,15 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const uid = () => Math.random().toString(36).slice(2, 10);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// até `max` itens sorteados de uma lista (sem repetir)
+const sampleOf = (arr, max) => {
+  const copy = arr.slice();
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, max);
+};
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const ease = {
@@ -125,7 +143,7 @@ function defaults() {
   return {
     options: [],
     eliminated: [],
-    settings: { trickChance: 35, elimination: false, sound: true, includeAll: false, includeNone: false },
+    settings: { trickChance: 35, elimination: false, sound: true, includeAll: false, includeNone: false, includeAgain: false },
     players: [],
     history: [],
   };
@@ -194,6 +212,7 @@ function wheelOptions() {
   const list = state.options.slice();
   if (state.settings.includeAll) list.push(SPECIALS.todos);
   if (state.settings.includeNone) list.push(SPECIALS.nenhum);
+  if (state.settings.includeAgain) list.push(SPECIALS.again);
   return list;
 }
 const activeOptions = () => wheelOptions().filter((o) => !state.eliminated.includes(o.id));
@@ -271,13 +290,14 @@ const sfx = {
     src.stop(t + dur + 0.02);
   },
 
-  clack() {
+  // vol de 0 a 1: mais fraco quando a roleta passa devagar
+  clack(vol = 1) {
     if (!this.ok()) return;
     const now = performance.now();
     if (now - this.lastClack < 28) return;
     this.lastClack = now;
-    this.noise(0.035, { freq: 3200, q: 2, vol: 0.35 });
-    this.tone(1400, 0.03, { type: 'square', vol: 0.03 });
+    this.noise(0.035, { freq: 3200, q: 2, vol: 0.35 * vol });
+    this.tone(1400, 0.03, { type: 'square', vol: 0.03 * vol });
   },
 
   fanfare(big) {
@@ -310,6 +330,12 @@ const sfx = {
   pop() {
     if (!this.ok()) return;
     this.tone(700, 0.15, { type: 'sine', vol: 0.2, slideTo: 150 });
+  },
+  // "toc" de madeira: a seta batendo no pino sem conseguir passar
+  knock() {
+    if (!this.ok()) return;
+    this.tone(260, 0.09, { type: 'triangle', vol: 0.22, slideTo: 150 });
+    this.noise(0.05, { ftype: 'lowpass', freq: 1200, q: 1, vol: 0.25 });
   },
 
   // Carga do botão: um "motor" que acelera (fica mais agudo, mais aberto e treme mais rápido)
@@ -477,8 +503,9 @@ const fx = {
   // (círculo de raio `radius` em volta de ox, oy), pra fora, em 3 ondas
   burst(items, ox, oy, radius = 0) {
     if (!items.length) return;
-    const sprites = items.map(({ text, color }) => this.pillSprite(text, color));
-    const perWave = Math.max(10, sprites.length * 3);
+    // com muitas opções, sorteia algumas: no máximo 12 etiquetas por onda (36 no total)
+    const sprites = sampleOf(items, 18).map(({ text, color }) => this.pillSprite(text, color));
+    const perWave = clamp(items.length * 3, 10, 12);
     for (let w = 0; w < 3; w++) {
       setTimeout(() => {
         for (let i = 0; i < perWave; i++) {
@@ -499,8 +526,9 @@ const fx = {
   // puxadas pra dentro dela, acelerando, girando, encolhendo e sumindo na borda (raio `radius`)
   implode(items, ox, oy, radius) {
     if (!items.length) return;
-    const sprites = items.map(({ text, color }) => this.pillSprite(text, color));
-    const perWave = Math.max(8, sprites.length * 3);
+    // com muitas opções, sorteia algumas: no máximo 10 etiquetas por onda (30 no total)
+    const sprites = sampleOf(items, 15).map(({ text, color }) => this.pillSprite(text, color));
+    const perWave = clamp(items.length * 3, 8, 10);
     for (let w = 0; w < 3; w++) {
       setTimeout(() => {
         for (let i = 0; i < perWave; i++) {
@@ -891,6 +919,48 @@ function fitText(c, text, max) {
   return s + '…';
 }
 
+// Medidas das divisórias e do disco central, conforme o número de fatias:
+//  - bw: grossura da ripa (fina quando há muitas fatias)
+//  - r0: onde as ripas começam (antes disso elas se encostariam)
+//  - plateR: raio do disco de madeira do centro, que cobre até onde as ripas começam
+function dividerGeom(R, seg) {
+  const bw = clamp(R * seg * 0.1, 1.2, R * 0.024);
+  const r0 = Math.max(R * HUB_RATIO, (bw * 2) / seg);
+  const plateR = Math.max(R * HUB_RATIO * 1.4, r0);
+  return { bw, r0, plateR };
+}
+
+// Tamanho da letra e texto (cortado com "…" se precisar) de cada nome na roleta.
+// Calculado uma vez por nome/tamanho de roleta/número de fatias e guardado: medir texto a cada
+// quadro, com até ~100 fatias, pesaria.
+const labelCache = new Map();
+function labelLayout(c, label, R, seg) {
+  const key = `${W}|${seg.toFixed(5)}|${label}`;
+  const hit = labelCache.get(key);
+  if (hit) return hit;
+  if (labelCache.size > 600) labelCache.clear();
+
+  const halfSin = Math.sin(Math.min(seg / 2, Math.PI / 2));
+  const outer = R - 14; // onde o texto termina (perto da borda)
+  // a letra acompanha a espessura da fatia: de 9px (muitas fatias) até 24px (poucas)
+  let size = Math.round(clamp(R * halfSin * 0.55, 9, 24));
+  // até onde o texto pode ir em direção ao centro sem ficar mais alto que a fatia
+  const maxWidthFor = (s) => {
+    const rMin = Math.max(dividerGeom(R, seg).plateR + 6, (s * 1.15) / (2 * halfSin));
+    return Math.max(20, Math.min(R * 0.76, outer - rMin));
+  };
+  const fontFor = (s) => `800 ${s}px "Segoe UI", system-ui, sans-serif`;
+  c.font = fontFor(size);
+  // nome comprido: diminui a letra (ganha espaço) antes de cortar
+  while (size > 9 && c.measureText(label).width > maxWidthFor(size)) {
+    size -= 1;
+    c.font = fontFor(size);
+  }
+  const result = { font: fontFor(size), text: fitText(c, label, maxWidthFor(size)) };
+  labelCache.set(key, result);
+  return result;
+}
+
 // Texturas das fatias especiais (criadas uma vez só)
 const patterns = {};
 function slicePattern(c, type) {
@@ -899,6 +969,17 @@ function slicePattern(c, type) {
   tile.width = tile.height = 16;
   const tc = tile.getContext('2d');
   tc.lineCap = 'square';
+  if (type === 'again') {
+    // "Gira de novo": bolinhas (diferente das listras do Tudo e da hachura do Nada)
+    tc.fillStyle = 'rgba(255,255,255,.2)';
+    for (const [x, y] of [[4, 4], [12, 12]]) {
+      tc.beginPath();
+      tc.arc(x, y, 2.2, 0, TAU);
+      tc.fill();
+    }
+    patterns[type] = c.createPattern(tile, 'repeat');
+    return patterns[type];
+  }
   if (type === 'todos') {
     tc.strokeStyle = 'rgba(255,255,255,.22)';
     tc.lineWidth = 5;
@@ -942,7 +1023,6 @@ function drawWheel(t) {
     c.fill();
   } else {
     const seg = TAU / n;
-    const fs = clamp(R * Math.sin(Math.min(seg / 2, Math.PI / 2)) * 0.28, 12, 24);
     for (let i = 0; i < n; i++) {
       const o = list[i];
       const a0 = i * seg;
@@ -985,20 +1065,13 @@ function drawWheel(t) {
       c.rotate(a0 + seg / 2);
       c.textAlign = 'right';
       c.textBaseline = 'middle';
-      const label = labelFor(o);
-      const maxW = R * 0.76;
-      let size = fs;
-      c.font = `800 ${size}px "Segoe UI", system-ui, sans-serif`;
-      while (size > 12 && c.measureText(label).width > maxW) {
-        size -= 1;
-        c.font = `800 ${size}px "Segoe UI", system-ui, sans-serif`;
-      }
-      const ink = o.type === 'todos' ? '#3a2200' : o.type === 'nenhum' ? '#b4b4c8' : '#fff';
-      const text = fitText(c, label, maxW);
-      c.fillStyle = ink;
+      const L = labelLayout(c, labelFor(o), R, seg);
+      c.font = L.font;
+      c.fillStyle = o.type === 'todos' ? '#3a2200' : o.type === 'nenhum' ? '#b4b4c8' : '#fff';
+      // sombra no texto custa caro: com muitas fatias, desliga
       c.shadowColor = 'rgba(0,0,0,.45)';
-      c.shadowBlur = o.type ? 0 : 4;
-      c.fillText(text, R - 14, 0);
+      c.shadowBlur = o.type || n > 30 ? 0 : 4;
+      c.fillText(L.text, R - 14, 0);
       c.restore();
     }
 
@@ -1012,9 +1085,10 @@ function drawWheel(t) {
     c.fillStyle = sh;
     c.fill();
 
-    // Divisórias: ripas de madeira com relevo + pino de latão na ponta (é nele que a seta bate)
-    const bw = Math.max(3, R * 0.024);
-    const r0 = R * HUB_RATIO;
+    // Divisórias: ripas de madeira com relevo + pino de latão na ponta (é nele que a seta bate).
+    // Com muitas fatias, as ripas e os pinos afinam (ver dividerGeom).
+    const { bw, r0, plateR } = dividerGeom(R, seg);
+    const pegK = wheelCache.peg ? Math.min(1, (R * seg * 0.45) / (wheelCache.pegR * 2)) : 1;
     const wood = c.createLinearGradient(0, -bw / 2, 0, bw / 2);
     wood.addColorStop(0, '#d8a066');
     wood.addColorStop(0.35, '#9a5f2c');
@@ -1029,11 +1103,40 @@ function drawWheel(t) {
       c.fillStyle = 'rgba(255,225,180,.28)'; // veio claro ao longo da ripa
       c.fillRect(r0, -bw * 0.18, R - r0, Math.max(0.6, bw * 0.12));
       if (wheelCache.peg) {
-        const s = wheelCache.pegSize;
-        c.drawImage(wheelCache.peg, R - wheelCache.pegR * 1.7 - s / 2, -s / 2, s, s);
+        const s = wheelCache.pegSize * pegK;
+        c.drawImage(wheelCache.peg, R - wheelCache.pegR * 1.7 * pegK - s / 2, -s / 2, s, s);
       }
       c.restore();
     }
+
+    // Disco de madeira no centro: cobre a região onde as fatias ficam finas demais
+    // (com muitas fatias, as pontinhas se espremiam e viravam um anel colorido)
+    const plate = c.createRadialGradient(0, 0, R * HUB_RATIO, 0, 0, plateR);
+    plate.addColorStop(0, '#5a3015');
+    plate.addColorStop(0.6, '#8a5226');
+    plate.addColorStop(1, '#6a3a18');
+    c.beginPath();
+    c.arc(0, 0, plateR, 0, TAU);
+    c.fillStyle = plate;
+    c.fill();
+    // veios em anel (é um círculo, então não muda com o giro)
+    for (const [k, a] of [[0.55, 0.22], [0.72, 0.16], [0.86, 0.2]]) {
+      c.beginPath();
+      c.arc(0, 0, R * HUB_RATIO + (plateR - R * HUB_RATIO) * k, 0, TAU);
+      c.lineWidth = 1;
+      c.strokeStyle = `rgba(40,16,4,${a})`;
+      c.stroke();
+    }
+    c.beginPath();
+    c.arc(0, 0, plateR, 0, TAU);
+    c.lineWidth = 2;
+    c.strokeStyle = 'rgba(25,10,2,.85)';
+    c.stroke();
+    c.beginPath();
+    c.arc(0, 0, plateR - 2.5, 0, TAU);
+    c.lineWidth = 1;
+    c.strokeStyle = 'rgba(255,210,150,.2)';
+    c.stroke();
   }
   c.restore();
 
@@ -1084,14 +1187,36 @@ function drawWheel(t) {
   drawPointer(c, cx, m, R, t);
 }
 
-// Seta em formato de "lingueta": cabeça redonda presa num eixo, ponta afinando pra baixo.
-// w = raio da cabeça; py = altura do eixo; len = distância do eixo até a ponta.
+// Seta em formato de "lingueta" DURA: cabeça redonda presa num eixo, ponta afinando pra baixo.
+// Ela só GIRA no eixo (rt.wobble), nunca entorta.
+//  w = raio da cabeça; py = altura do eixo; len = distância do eixo até a ponta.
+//  A ponta termina na altura do centro dos pinos, pra que eles a empurrem quando passam.
 function pointerGeom() {
-  const { m, R, cx } = geom();
-  const w = m * 0.34;              // cabeça menor e ponta mais longa = cara de lingueta, não de pino de mapa
+  const { m, R, cx, cy } = geom();
+  const w = m * 0.34;
   const py = m * 0.42;
-  const len = m * 0.68 + R * 0.06;
-  return { cx, py, w, len };
+  const n = Math.max(1, activeOptions().length);
+  const seg = TAU / n;
+  const basePegR = wheelCache.pegR || R * 0.03;
+  const pegK = Math.min(1, (R * seg * 0.45) / (basePegR * 2));
+  const pegR = basePegR * pegK;
+  const rp = R - basePegR * 1.7 * pegK;    // raio onde ficam os centros dos pinos
+  const rc = pegR + 2.5;                    // raio do pino + folga da ponta da seta
+  const s = rp * seg;                       // distância entre dois pinos, na altura da ponta
+  const L0 = cy - rp - py;                  // comprimento com a ponta na altura do centro dos pinos
+  // Quanto a ponta "entra" no caminho dos pinos. Pinos longe (poucas fatias): entra bastante.
+  // Pinos colados (muitas fatias): só raspa, pra seta se soltar de um pino antes do próximo
+  // chegar e conseguir ficar reta entre eles.
+  const eng = clamp((0.36 * s) ** 2 / (2 * L0), 0.6, rc);
+  const e = rc - eng;                       // a ponta fica "e" acima do centro dos pinos
+  const len = Math.max(w * 1.8, L0 - e);
+  // distância (horizontal, do pino até o eixo da seta) em que o pino SOLTA a seta inclinada,
+  // e em que um pino chegando ENCOSTA na seta reta. A seta tem tamanho mínimo, então ela pode
+  // entrar mais fundo que o planejado: usa o quanto entra de verdade (L0 - len).
+  const eReal = L0 - len;
+  const dRel = Math.sqrt(Math.max(0, (len + rc) ** 2 - L0 ** 2));
+  const dTouch = Math.sqrt(Math.max(0, rc * rc - eReal * eReal));
+  return { cx, cy, py, w, len, rp, rc, seg, s, dRel, dTouch };
 }
 
 function drawPointer(c, cx, m, R, t) {
@@ -1169,33 +1294,80 @@ function drawPointer(c, cx, m, R, t) {
    ========================================================= */
 let lastT = performance.now();
 
-function onPeg(dir) {
-  sfx.clack();
-  // o pino empurra a ponta do ponteiro no sentido do giro
-  rt.wobble = clamp(-0.42 * dir, -0.6, 0.6);
-  rt.wobbleVel = 0;
-}
+/* ---------- Seta DURA x pinos ----------
+   A seta é rígida e só gira no eixo. A ponta anda num arco em volta do eixo; o pino é um
+   círculo. A ponta nunca pode entrar no círculo do pino:
+     1) o pino chega e empurra a ponta: a seta gira (inteira) pro lado;
+     2) girando, a ponta sobe no arco e desliza por cima do pino;
+     3) quando a ponta fica alta o bastante, o pino passa por baixo dela e a seta volta
+        pro centro pela mola, suave.
+   O ângulo vem da geometria (arco da ponta x círculo do pino), então não tem pulo e a ponta
+   nunca atravessa o pino, nem com a roleta parada.
+   Rápido demais (o pino passa de um quadro pro outro), a seta leva só o tranco da mola. */
+rt.contacts = new Map(); // pinos encostando na seta: índice do pino -> lado da ponta (+1 direita, -1 esquerda)
 
 function frame(t) {
   const dt = Math.min(50, t - lastT);
   lastT = t;
   const k = dt / 16.67;
+  const dRot = rt.rotation - rt.lastRot;
+
+  // limites pro ângulo da ponta (theta = -wobble; theta > 0 = ponta pra direita)
+  let thetaMin = -Infinity;
+  let thetaMax = Infinity;
 
   const n = activeOptions().length;
-  if (n > 0) {
-    const seg = TAU / n;
+  if (n > 0 && W) {
+    const pg = pointerGeom();
+    const seg = pg.seg;
+    const L = pg.len;
+    const fast = Math.abs(dRot) * pg.rp > pg.rc; // o pino andou mais que um raio num quadro
+
+    // "clack" quando um pino passa pela seta (som mais fraco quanto mais devagar)
     const idx = Math.floor((-Math.PI / 2 - rt.rotation) / seg);
     if (rt.lastN === n && rt.lastIdx !== null && idx !== rt.lastIdx) {
-      onPeg(Math.sign(rt.rotation - rt.lastRot) || 1);
+      sfx.clack(clamp(Math.abs(dRot) / 0.05, 0.12, 1));
+      if (fast) {
+        rt.wobble = clamp(-0.42 * Math.sign(dRot), -0.6, 0.6);
+        rt.wobbleVel = 0;
+      }
     }
     rt.lastIdx = idx;
     rt.lastN = n;
+
+    if (fast) {
+      rt.contacts.clear();
+    } else {
+      const theta = -rt.wobble;
+      const j0 = Math.round((-Math.PI / 2 - rt.rotation) / seg);
+      const seen = new Set();
+      for (let j = j0 - 3; j <= j0 + 3; j++) {
+        const a = rt.rotation + j * seg;
+        const px = pg.rp * Math.cos(a);                 // centro do pino, relativo ao eixo da seta
+        const py = pg.cy + pg.rp * Math.sin(a) - pg.py;
+        const D = Math.hypot(px, py);
+        if (D >= L + pg.rc || D <= L - pg.rc) continue;  // o arco da ponta não alcança esse pino
+        // ângulos da ponta que entrariam no pino: (phi - psi, phi + psi)
+        const phi = Math.atan2(px, py);
+        const psi = Math.acos(clamp((L * L + D * D - pg.rc * pg.rc) / (2 * L * D), -1, 1));
+        seen.add(j);
+        if (!rt.contacts.has(j)) rt.contacts.set(j, theta >= phi ? 1 : -1); // de que lado a ponta está
+        if (rt.contacts.get(j) > 0) thetaMin = Math.max(thetaMin, phi + psi);
+        else thetaMax = Math.min(thetaMax, phi - psi);
+      }
+      for (const j of [...rt.contacts.keys()]) if (!seen.has(j)) rt.contacts.delete(j);
+    }
   }
   rt.lastRot = rt.rotation;
 
-  // mola do ponteiro
-  rt.wobbleVel += (-0.25 * rt.wobble - 0.2 * rt.wobbleVel) * k;
+  // mola da seta (volta pro centro suave) + os pinos segurando, se estiverem encostados
+  rt.wobbleVel += (-0.12 * rt.wobble - 0.32 * rt.wobbleVel) * k;
   rt.wobble += rt.wobbleVel * k;
+  if (thetaMin > thetaMax) thetaMax = thetaMin;            // apertada entre dois pinos: segue o que empurra
+  const wMin = -thetaMax;                                   // theta = -wobble
+  const wMax = -thetaMin;
+  if (rt.wobble > wMax) { rt.wobble = wMax; if (rt.wobbleVel > 0) rt.wobbleVel = 0; }
+  if (rt.wobble < wMin) { rt.wobble = wMin; if (rt.wobbleVel < 0) rt.wobbleVel = 0; }
 
   drawWheel(t);
   fx.update(k, t);
@@ -1252,8 +1424,9 @@ function stopSuspense() {
 async function spin(opts = {}) {
   if (rt.spinning || rt.overlayOpen) return;
   const list = activeOptions();
-  if (list.length < 2) {
-    if (state.settings.elimination && list.length === 1) say(`Só sobrou ${displayName(list[0])}! Restaure as opções.`);
+  const real = list.filter((o) => o.type !== 'again'); // "Gira de novo" sozinho não decide nada
+  if (real.length < 2) {
+    if (state.settings.elimination && real.length === 1) say(`Só sobrou ${displayName(real[0])}! Restaure as opções.`);
     else say('Coloque pelo menos 2 opções!');
     return;
   }
@@ -1280,21 +1453,64 @@ async function spin(opts = {}) {
   }
 
   // 2) Decide se vai ter pegadinha
-  const trick = Math.random() * 100 < state.settings.trickChance ? pick(['slide', 'back', 'shake']) : null;
+  //    slide  = Escorregada: quase para e escorrega pra fatia seguinte
+  //    back   = Volta pra trás (2 versões, ver abaixo)
+  //    shake  = Tremedeira: treme em cima da divisória
+  //    extra  = Embalada: quase para e ganha fôlego de novo, andando várias fatias
+  const tricks = ['slide', 'back', 'shake'];
+  if (n >= 4) tricks.push('extra'); // a Embalada precisa de fatias pra andar
+  const trick = Math.random() * 100 < state.settings.trickChance ? pick(tricks) : null;
+  // Escorregada: às vezes, depois de escorregar pra próxima fatia, volta pra que já ia cair (e fica nela)
+  const slideBack = trick === 'slide' && Math.random() < 0.4;
+  const extraSlices = trick === 'extra' ? Math.floor(rand(2, Math.min(6, n - 1) + 1)) : 0;
+  // Física (não é pegadinha): às vezes chega fraca na divisória, bate no pino, não passa e volta
+  const bounce = !trick && Math.random() < 0.35;
+  // A roleta tem que parar com a seta RETA, sem encostar em pino nenhum: senão a seta fica
+  // inclinada apontando pra fatia vizinha. gMin = quão longe da divisória (em fração da fatia)
+  // o ponto final precisa estar. Fatias largas: quase nada; muitas fatias finas: perto do meio.
+  //  gBehind: longe o bastante do pino que acabou de passar, pra ele soltar a seta;
+  //  gAhead:  longe o bastante do pino da frente, pra ele não encostar.
+  const pgEnd = pointerGeom();
+  const margin = 0.6; // px de folga
+  const gBehind = (pgEnd.dRel + margin) / pgEnd.s;   // pino que acabou de passar
+  const gAhead = (pgEnd.dTouch + margin) / pgEnd.s;  // pino que vem a seguir
+  // no bounce, distância (em fatias) entre o ponto final e o pino: ~20% da fatia, no máx. ~5°,
+  // mas sempre longe o bastante pra seta voltar a ficar reta
+  const bounceD = Math.min(0.48, Math.max(Math.min(0.2, 0.09 / seg), gAhead - 0.01));
+  // Tremedeira: treme na divisória de entrada (termina andando pra frente) ou na de saída (voltando)
+  const shakeAtEntry = Math.random() < 0.5;
+  // o último movimento termina pra frente ou voltando? Muda qual pino acabou de passar.
+  const endsBackward = slideBack || trick === 'back' || (trick === 'shake' && !shakeAtEntry);
 
   // 3) Posições. "u" = quantas fatias ANTES do ponto final (no sentido do giro).
   //    g = quanto da fatia final já foi percorrido ao parar.
-  const g = trick === 'slide' ? 0.22 : trick ? 0.5 : rand(0.15, 0.85);
+  let g;
+  if (slideBack) g = 0.7;                    // o resultado é a fatia onde ela ia parar
+  else if (trick === 'slide') g = 0.22;
+  else if (bounce) g = 1 - bounceD - 0.01;   // termina pertinho da divisória de saída
+  else if (trick) g = 0.5;
+  else g = rand(0.15, 0.85);
+  // longe dos pinos (seta reta): o pino que acabou de passar precisa ter soltado a seta
+  // (gBehind) e o próximo não pode encostar (gAhead). Muitas fatias: sobra uma faixa estreita.
+  if (!bounce) {
+    const lo = endsBackward ? gAhead : gBehind;
+    const hi = 1 - (endsBackward ? gBehind : gAhead);
+    if (lo > hi) g = (lo + hi) / 2;
+    else g = clamp(g, Math.min(Math.max(0.15, lo), hi), Math.max(Math.min(0.85, hi), lo));
+  }
   const f = dir === 1 ? 1 - g : g;
   const aFinal = (k + f) * seg;              // ângulo sob o ponteiro, no "espaço da roleta"
   const aAt = (u) => aFinal + dir * u * seg;
 
   let u1 = 0;
   let shakeSeq = null;
-  if (trick === 'slide') u1 = g + 0.3;               // quase para na fatia anterior
+  if (slideBack) u1 = 0.08;                          // quase para na fatia (que vai ser o resultado)
+  else if (trick === 'slide') u1 = g + 0.3;          // quase para na fatia anterior
   else if (trick === 'back') u1 = -(1 - g) - 0.4;    // passa da fatia e para na seguinte
+  else if (trick === 'extra') u1 = g + extraSlices - 0.5 + rand(-0.15, 0.15); // quase para várias fatias antes
+  else if (bounce) u1 = -bounceD;                    // encosta no pino da divisória de saída
   else if (trick === 'shake') {
-    const atEntry = Math.random() < 0.5;
+    const atEntry = shakeAtEntry;
     const uB = atEntry ? g : g - 1;                  // divisória de entrada ou de saída
     const side = atEntry ? 1 : -1;                   // lado "errado" da divisória
     shakeSeq = [-0.12, 0.1, -0.08, 0.07, -0.05].map((d) => uB + side * d);
@@ -1324,13 +1540,35 @@ async function spin(opts = {}) {
   });
 
   // 5) Pegadinhas
-  if (trick === 'slide') {
+  if (trick === 'slide' && slideBack) {
+    // ia parar em A, escorrega pra B... e volta pra A
+    const almost = rotAt(u1 - 0.04);
+    await tween(R1, almost, 800, ease.linear);
+    const next = rotAt(-(1 - g) - 0.25);   // um pouco pra dentro da próxima fatia
+    await tween(almost, next, 1300, ease.inOut);
+    await wait(600);
+    await tween(next, rotAt(0), 1200, ease.inOut);
+  } else if (trick === 'slide') {
+    // ia parar em A e escorrega pra B
     const almost = rotAt(u1 - 0.04);
     await tween(R1, almost, 800, ease.linear);
     await tween(almost, rotAt(0), 1500, ease.inOut);
   } else if (trick === 'back') {
+    // passou da fatia, parou na seguinte... e volta
     await wait(1000);
     await tween(R1, rotAt(0), 1300, ease.inOut);
+  } else if (trick === 'extra') {
+    // quase para... e embala de novo, andando várias fatias
+    const almost = rotAt(u1 - 0.04);
+    await tween(R1, almost, 700, ease.linear);
+    await tween(almost, rotAt(0), 900 + extraSlices * 260, ease.inOut);
+  } else if (bounce) {
+    // bateu no pino sem força pra passar: o pino entorta a seta (contato no frame()),
+    // a roleta volta um pouquinho e assenta
+    sfx.knock();
+    const back = rotAt(bounceD * 0.35);
+    await tween(R1, back, 260, ease.outCubic);
+    await tween(back, rotAt(0), 420, ease.inOut);
   } else if (trick === 'shake') {
     let prev = R1;
     for (const u of shakeSeq) {
@@ -1362,6 +1600,18 @@ function finish(opt, trick) {
   rt.currentResult = opt;
   if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
 
+  // "Gira de novo": sem cartão; avisa, destaca a fatia por um instante e gira sozinha
+  // (nunca é eliminada, nem no modo eliminação)
+  if (opt.type === 'again') {
+    say('Gira de novo!');
+    sfx.pop();
+    setTimeout(() => {
+      rt.highlightId = null;
+      spin();
+    }, 1300);
+    return;
+  }
+
   if (state.settings.elimination) {
     pushHistory(opt, 'eliminado');
     showEliminated(opt, trick);
@@ -1381,19 +1631,22 @@ function showResult(opt, { trick = null, final = false } = {}) {
   // opções que entram no "Tudo" (as que ainda estão na roleta; se nenhuma, todas da lista)
   const allOpts = state.options.filter((o) => !state.eliminated.includes(o.id));
   const tudoOpts = allOpts.length ? allOpts : state.options;
+  // Etiquetas das opções no cartão: no máximo 12; o resto vira uma etiqueta "+N"
+  const MAX_CHIPS = 12;
+  const many = tudoOpts.length > MAX_CHIPS;
+  const chipsHtml = (cls) => `<div class="chips ${cls}">${tudoOpts
+    .slice(0, MAX_CHIPS)
+    .map((o) => `<span class="chip" style="--c:${colorFor(o)}">${esc(displayName(o))}</span>`)
+    .join('')}${many ? `<span class="chip chip-more">+${tudoOpts.length - MAX_CHIPS}</span>` : ''}</div>`;
   let sub, art;
   let extra = '';
   if (opt.type === 'todos') {
-    sub = 'Valem todas as opções:';
-    extra = `<div class="chips">${tudoOpts
-      .map((o) => `<span class="chip" style="--c:${colorFor(o)}">${esc(displayName(o))}</span>`)
-      .join('')}</div>`;
+    sub = many ? `Valem todas as ${tudoOpts.length} opções:` : 'Valem todas as opções:';
+    extra = chipsHtml('');
     art = ART.todos;
   } else if (opt.type === 'nenhum') {
-    sub = 'Não vale nenhuma opção:';
-    extra = `<div class="chips off">${tudoOpts
-      .map((o) => `<span class="chip" style="--c:${colorFor(o)}">${esc(displayName(o))}</span>`)
-      .join('')}</div>`;
+    sub = many ? `Não vale nenhuma das ${tudoOpts.length} opções:` : 'Não vale nenhuma opção:';
+    extra = chipsHtml('off');
     art = ART.nenhum;
   } else {
     sub = 'Tá decidido!';
@@ -1464,7 +1717,8 @@ function showEliminated(opt, trick) {
       save();
       renderOptions();
       sfx.pop();
-      const rest = activeOptions();
+      // "Gira de novo" não conta: o vencedor é a última opção de verdade
+      const rest = activeOptions().filter((o) => o.type !== 'again');
       if (rest.length === 1) {
         pushHistory(rest[0], 'vencedor');
         setTimeout(() => showResult(rest[0], { final: true }), 450);
@@ -1700,6 +1954,7 @@ function syncSettings() {
   $('#elimToggle').checked = state.settings.elimination;
   $('#allToggle').checked = state.settings.includeAll;
   $('#noneToggle').checked = state.settings.includeNone;
+  $('#againToggle').checked = state.settings.includeAgain;
   syncMute();
 }
 
@@ -1723,8 +1978,24 @@ function renderAll() {
 // Uma opção por linha (vírgula pode fazer parte do nome)
 const splitList = (text) => text.split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
 
-// Adiciona várias opções de uma vez (respeitando o máximo)
-function addOptions(names) {
+// "Gira de novo", "gira de novo!", "GIRÁ DE NOVO" -> "GIRA DE NOVO" (pra reconhecer os especiais)
+const normalizeAlias = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
+
+// Adiciona várias opções de uma vez (respeitando o máximo).
+// Linhas "TUDO", "NADA" ou "GIRA DE NOVO" ligam a fatia especial em vez de virar opção comum.
+function addOptions(lines) {
+  let turnedOn = false;
+  const names = [];
+  for (const line of lines) {
+    const key = SPECIAL_ALIASES[normalizeAlias(line)];
+    if (key) {
+      if (!state.settings[key]) { state.settings[key] = true; turnedOn = true; }
+    } else {
+      names.push(line);
+    }
+  }
+  if (turnedOn) { save(); syncSettings(); renderOptions(); }
+  if (!names.length) return 0;
   const room = MAX_OPTIONS - state.options.length;
   if (room <= 0) { say(`Máximo de ${MAX_OPTIONS} opções!`); return 0; }
   const added = names.slice(0, room).map((n) => ({ id: uid(), name: n.slice(0, 40) }));
@@ -1806,6 +2077,7 @@ function bindSpecialToggle(sel, key, special, onMsg) {
 }
 bindSpecialToggle('#allToggle', 'includeAll', SPECIALS.todos, 'Fatia "Tudo" na roleta!');
 bindSpecialToggle('#noneToggle', 'includeNone', SPECIALS.nenhum, 'Fatia "Nada" na roleta!');
+bindSpecialToggle('#againToggle', 'includeAgain', SPECIALS.again, 'Fatia "Gira de novo" na roleta!');
 
 $('#muteBtn').addEventListener('click', () => {
   state.settings.sound = !state.settings.sound;
